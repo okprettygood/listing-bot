@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+next-env.d.ts
+*.tsbuildinfo
+
+# Environment — never commit secrets
+.env.local
+.env*.local
+
+# Session files — contain auth cookies, must not be committed
+data/fb-session.json
+data/offerup-session.json
+
+# Runtime data
+data/photos/
+data/debug/
+data/publish-history.json
+
+# macOS
+.DS_Store
+
+# Claude Code — local user settings only
+.claude/settings.local.json
