@@ -58,5 +58,5 @@ const GROUP_BADGE_CLASSES = [
 const GROUP_BADGE_FALLBACK = "bg-gray-500 text-white";
 
 export function groupBadgeClass(groupId: number): string {
-  return GROUP_BADGE_CLASSES[groupId - 1] ?? GROUP_BADGE_FALLBACK;
+  return GROUP_BADGE_CLASSES[Math.max(0, groupId - 1)] ?? GROUP_BADGE_FALLBACK;
 }
