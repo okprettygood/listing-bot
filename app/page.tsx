@@ -58,6 +58,7 @@ type PublishState =
   | { status: "idle" }
   | { status: "publishing" }
   | { status: "ready_to_review"; screenshot?: string }
+  | { status: "awaiting_url" }
   | { status: "success"; url?: string }
   | { status: "error"; error: string; screenshot?: string };
 
@@ -330,7 +331,8 @@ export default function Page() {
           copied={copied}
           publishState={publishState}
           onPublish={publishToFacebook}
-          onConfirmPublished={() => setPublishState({ status: "success" })}
+          onConfirmPublished={() => setPublishState({ status: "awaiting_url" })}
+          onSaveUrl={(url) => setPublishState({ status: "success", url: url || undefined })}
         />
       )}
     </main>
@@ -535,6 +537,7 @@ function ResultsStage({
   publishState,
   onPublish,
   onConfirmPublished,
+  onSaveUrl,
 }: {
   listing: Listing;
   comps: CompResponse;
@@ -545,6 +548,7 @@ function ResultsStage({
   publishState: PublishState;
   onPublish: () => void;
   onConfirmPublished: () => void;
+  onSaveUrl: (url: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>("listing");
   const combinedStats = getCombinedStats(comps);
@@ -582,6 +586,7 @@ function ResultsStage({
             publishState={publishState}
             onPublish={onPublish}
             onConfirmPublished={onConfirmPublished}
+            onSaveUrl={onSaveUrl}
           />
         )}
         {tab === "comps" && (
@@ -634,6 +639,7 @@ function ListingTab({
   publishState,
   onPublish,
   onConfirmPublished,
+  onSaveUrl,
 }: {
   listing: Listing;
   combinedStats: CombinedStats | null;
@@ -644,6 +650,7 @@ function ListingTab({
   publishState: PublishState;
   onPublish: () => void;
   onConfirmPublished: () => void;
+  onSaveUrl: (url: string) => void;
 }) {
   const titleLen = listing.title.length;
   const titleOk = titleLen >= 60 && titleLen <= 80;
@@ -796,6 +803,7 @@ function ListingTab({
         state={publishState}
         onPublish={onPublish}
         onConfirmPublished={onConfirmPublished}
+        onSaveUrl={onSaveUrl}
       />
 
       <button
@@ -813,11 +821,15 @@ function PublishSection({
   state,
   onPublish,
   onConfirmPublished,
+  onSaveUrl,
 }: {
   state: PublishState;
   onPublish: () => void;
   onConfirmPublished: () => void;
+  onSaveUrl: (url: string) => void;
 }) {
+  const [urlInput, setUrlInput] = useState("");
+
   return (
     <div className="space-y-2 border-t border-neutral-200 pt-4">
       <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">
@@ -837,9 +849,8 @@ function PublishSection({
       ) : state.status === "ready_to_review" ? (
         <div className="space-y-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3.5">
           <p className="text-sm font-medium text-blue-900">
-            Form is filled. Review on your laptop and click{" "}
-            <span className="font-semibold">Next → Publish</span> yourself when
-            ready.
+            Form is ready. Review on your laptop and click{" "}
+            <span className="font-semibold">Next → Publish</span> yourself.
           </p>
           <button
             type="button"
@@ -848,6 +859,36 @@ function PublishSection({
           >
             Done, it&apos;s published
           </button>
+        </div>
+      ) : state.status === "awaiting_url" ? (
+        <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3.5">
+          <p className="text-sm font-medium text-emerald-900">
+            Nice! Paste the listing URL to save it (optional).
+          </p>
+          <input
+            type="url"
+            inputMode="url"
+            placeholder="https://www.facebook.com/marketplace/item/…"
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-neutral-900 focus:outline-none"
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => onSaveUrl(urlInput.trim())}
+              className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white active:scale-[0.99]"
+            >
+              Save URL
+            </button>
+            <button
+              type="button"
+              onClick={() => onSaveUrl("")}
+              className="rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-sm font-medium text-neutral-600 active:scale-95"
+            >
+              Skip
+            </button>
+          </div>
         </div>
       ) : state.status === "success" ? (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">

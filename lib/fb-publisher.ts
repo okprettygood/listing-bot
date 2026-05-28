@@ -344,7 +344,7 @@ export async function publishToFBMarketplace(input: PublishInput): Promise<Publi
     // preview, then leave the browser open so the user can click
     // Next → Publish themselves. Never auto-submit.
     await jitter(500, 800); // let any UI settle
-    const reviewShot = await snapshot(page, "ready-to-review");
+    const reviewShot = await snapshot(page, "ready");
     keepBrowserOpen = true;
     return { success: true, readyToReview: true, screenshot: reviewShot };
   } catch (err) {
