@@ -3,7 +3,6 @@
 import {
   type BatchAssignments,
   type BatchItemResult,
-  nextGroupFor,
 } from "@/app/batch-types";
 import { BatchGroupingScreen } from "@/app/components/batch-grouping";
 import { BatchProgressScreen } from "@/app/components/batch-progress";
@@ -375,8 +374,9 @@ export default function Page() {
         break;
       }
 
-      // 30s cooldown before next item (skip after last)
-      if (i < groupIds.length - 1) {
+      // 30s cooldown before next item only when something was submitted to FB.
+      // Skip the delay entirely if this item failed (no FB API call was made).
+      if (i < groupIds.length - 1 && results[i].status.phase === "drafted") {
         for (let s = 30; s > 0; s--) {
           setBatchCooldown(s);
           await new Promise<void>((r) => setTimeout(r, 1000));
@@ -493,9 +493,9 @@ export default function Page() {
           batchMode={batchMode}
           onBatchModeChange={(v) => {
             setBatchMode(v);
-            // Clear loaded photos when switching modes — the cap changes
+            // Clear loaded photos when switching modes — the cap changes.
+            // setPhotos([]) is enough; the useEffect cleanup revokes the URLs.
             if (photos.length > 0) {
-              photos.forEach((p) => URL.revokeObjectURL(p.url));
               setPhotos([]);
             }
           }}
