@@ -1,5 +1,13 @@
 "use client";
 
+import {
+  type BatchAssignments,
+  type BatchItemResult,
+  nextGroupFor,
+} from "@/app/batch-types";
+import { BatchGroupingScreen } from "@/app/components/batch-grouping";
+import { BatchProgressScreen } from "@/app/components/batch-progress";
+import { BatchCompleteScreen } from "@/app/components/batch-complete";
 import { useEffect, useRef, useState } from "react";
 
 type Condition = "new" | "like_new" | "good" | "fair" | "poor";
@@ -68,7 +76,13 @@ type Photo = {
   url: string;
 };
 
-type Stage = "upload" | "loading" | "results";
+type Stage =
+  | "upload"
+  | "loading"
+  | "results"
+  | "batch_grouping"
+  | "batch_generating"
+  | "batch_complete";
 
 const CONDITIONS: { value: Condition; label: string }[] = [
   { value: "new", label: "New" },
@@ -146,6 +160,13 @@ export default function Page() {
   });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ── Batch mode state ──────────────────────────────────────────────────
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchAssignments, setBatchAssignments] = useState<BatchAssignments>({});
+  const [batchResults, setBatchResults] = useState<BatchItemResult[]>([]);
+  const [batchCooldown, setBatchCooldown] = useState<number | null>(null);
+  const [batchActiveIndex, setBatchActiveIndex] = useState(0);
+
   useEffect(() => {
     return () => {
       photos.forEach((p) => URL.revokeObjectURL(p.url));
@@ -164,8 +185,9 @@ export default function Page() {
       f.type.startsWith("image/"),
     );
     if (incoming.length === 0) return;
+    const cap = batchMode ? 40 : 8;
     setPhotos((prev) => {
-      const room = 8 - prev.length;
+      const room = cap - prev.length;
       if (room <= 0) return prev;
       const next = incoming.slice(0, room).map((file) => ({
         id: `${file.name}-${file.size}-${Math.random().toString(36).slice(2)}`,
@@ -219,6 +241,153 @@ export default function Page() {
     }
   }
 
+  function handleBatchGroupingStart() {
+    if (photos.length === 0) return;
+    const initial: BatchAssignments = {};
+    for (const p of photos) initial[p.id] = null;
+    setBatchAssignments(initial);
+    setStage("batch_grouping");
+  }
+
+  async function runBatchQueue() {
+    // Build ordered groups from current assignments
+    const groupIds = [
+      ...new Set(
+        Object.values(batchAssignments).filter((v): v is number => v !== null),
+      ),
+    ].sort((a, b) => a - b);
+
+    const photosByGroup: Record<number, File[]> = {};
+    for (const [photoId, groupId] of Object.entries(batchAssignments)) {
+      if (groupId === null) continue;
+      const photo = photos.find((p) => p.id === photoId);
+      if (!photo) continue;
+      if (!photosByGroup[groupId]) photosByGroup[groupId] = [];
+      photosByGroup[groupId].push(photo.file);
+    }
+
+    // Initialize results and switch to progress screen
+    const initialResults: BatchItemResult[] = groupIds.map((id) => ({
+      groupId: id,
+      photoCount: photosByGroup[id]?.length ?? 0,
+      title: null,
+      status: { phase: "waiting" },
+    }));
+    setBatchResults(initialResults);
+    setBatchActiveIndex(0);
+    setStage("batch_generating");
+
+    const results: BatchItemResult[] = initialResults.map((r) => ({ ...r }));
+
+    for (let i = 0; i < groupIds.length; i++) {
+      const groupId = groupIds[i];
+      const groupPhotos = photosByGroup[groupId] ?? [];
+      setBatchActiveIndex(i);
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) {
+          await new Promise<void>((r) => setTimeout(r, 5000));
+        }
+
+        // Generate listing
+        results[i] = { ...results[i], status: { phase: "generating" } };
+        setBatchResults([...results]);
+
+        type GenData = {
+          listingId?: string;
+          listing?: {
+            title: string;
+            description: string;
+            price: number | null;
+            condition: string;
+            category?: string;
+          };
+          error?: string;
+        };
+        let genData: GenData;
+
+        try {
+          const form = new FormData();
+          for (const f of groupPhotos) form.append("photos", f);
+          const genRes = await fetch("/api/generate", {
+            method: "POST",
+            body: form,
+          });
+          genData = (await genRes.json()) as GenData;
+          if (!genRes.ok || !genData.listing || !genData.listingId) {
+            throw new Error(
+              genData.error ?? `Generate failed (${genRes.status})`,
+            );
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Generate failed";
+          if (attempt < 1) continue;
+          results[i] = { ...results[i], status: { phase: "error", message: msg } };
+          setBatchResults([...results]);
+          break;
+        }
+
+        // Save draft
+        results[i] = {
+          ...results[i],
+          title: genData.listing!.title,
+          status: { phase: "saving_draft" },
+        };
+        setBatchResults([...results]);
+
+        type PubData = { success?: boolean; error?: string };
+        let pubData: PubData;
+
+        try {
+          const pubRes = await fetch("/api/publish", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              platform: "facebook",
+              mode: "draft",
+              listingId: genData.listingId,
+              listing: {
+                title: genData.listing!.title,
+                description: genData.listing!.description,
+                price: genData.listing!.price,
+                condition: genData.listing!.condition,
+                category: genData.listing!.category,
+              },
+            }),
+          });
+          pubData = (await pubRes.json()) as PubData;
+          if (!pubData.success) {
+            throw new Error(
+              pubData.error ?? `Draft save failed (${pubRes.status})`,
+            );
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "Draft save failed";
+          if (attempt < 1) continue;
+          results[i] = { ...results[i], status: { phase: "error", message: msg } };
+          setBatchResults([...results]);
+          break;
+        }
+
+        // Success
+        results[i] = { ...results[i], status: { phase: "drafted" } };
+        setBatchResults([...results]);
+        break;
+      }
+
+      // 30s cooldown before next item (skip after last)
+      if (i < groupIds.length - 1) {
+        for (let s = 30; s > 0; s--) {
+          setBatchCooldown(s);
+          await new Promise<void>((r) => setTimeout(r, 1000));
+        }
+        setBatchCooldown(null);
+      }
+    }
+
+    setStage("batch_complete");
+  }
+
   function startOver() {
     photos.forEach((p) => URL.revokeObjectURL(p.url));
     setPhotos([]);
@@ -229,6 +398,11 @@ export default function Page() {
     setPublishState({ status: "idle" });
     setError(null);
     setStage("upload");
+    setBatchAssignments({});
+    setBatchResults([]);
+    setBatchCooldown(null);
+    setBatchActiveIndex(0);
+    // Intentionally keep batchMode — user preference persists between batches
   }
 
   function copyText(key: string, text: string) {
@@ -315,6 +489,16 @@ export default function Page() {
           onFilesAdded={handleFilesAdded}
           onRemove={removePhoto}
           onGenerate={handleGenerate}
+          onBatchGenerate={handleBatchGroupingStart}
+          batchMode={batchMode}
+          onBatchModeChange={(v) => {
+            setBatchMode(v);
+            // Clear loaded photos when switching modes — the cap changes
+            if (photos.length > 0) {
+              photos.forEach((p) => URL.revokeObjectURL(p.url));
+              setPhotos([]);
+            }
+          }}
           fileInputRef={fileInputRef}
         />
       )}
@@ -335,6 +519,32 @@ export default function Page() {
           onSaveUrl={(url) => setPublishState({ status: "success", url: url || undefined })}
         />
       )}
+
+      {stage === "batch_grouping" && (
+        <BatchGroupingScreen
+          photos={photos}
+          assignments={batchAssignments}
+          onAssign={(photoId, group) =>
+            setBatchAssignments((prev) => ({ ...prev, [photoId]: group }))
+          }
+          onGenerate={runBatchQueue}
+        />
+      )}
+
+      {stage === "batch_generating" && (
+        <BatchProgressScreen
+          items={batchResults}
+          cooldown={batchCooldown}
+          activeIndex={batchActiveIndex}
+        />
+      )}
+
+      {stage === "batch_complete" && (
+        <BatchCompleteScreen
+          items={batchResults}
+          onStartOver={startOver}
+        />
+      )}
     </main>
   );
 }
@@ -346,6 +556,9 @@ function UploadStage({
   onFilesAdded,
   onRemove,
   onGenerate,
+  onBatchGenerate,
+  batchMode,
+  onBatchModeChange,
   fileInputRef,
 }: {
   photos: Photo[];
@@ -354,17 +567,56 @@ function UploadStage({
   onFilesAdded: (f: FileList | null) => void;
   onRemove: (id: string) => void;
   onGenerate: () => void;
+  onBatchGenerate: () => void;
+  batchMode: boolean;
+  onBatchModeChange: (v: boolean) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
 }) {
-  const atCap = photos.length >= 8;
+  const cap = batchMode ? 40 : 8;
+  const atCap = photos.length >= cap;
   return (
     <div className="space-y-5">
+      {/* Batch mode toggle */}
+      <div className="flex items-center justify-between rounded-xl border border-neutral-200 bg-white px-4 py-3">
+        <div>
+          <p className="text-sm font-medium text-neutral-800">Batch mode</p>
+          <p className="text-xs text-neutral-500">
+            Generate multiple listings at once
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={batchMode}
+          onClick={() => onBatchModeChange(!batchMode)}
+          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
+            batchMode ? "bg-neutral-900" : "bg-neutral-300"
+          }`}
+        >
+          <span
+            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+              batchMode ? "translate-x-5" : "translate-x-0"
+            }`}
+          />
+        </button>
+      </div>
+
+      {batchMode && (
+        <p className="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          Upload photos for multiple items. Group them, generate all listings,
+          and save as FB Marketplace drafts for review.
+        </p>
+      )}
+
       <div>
         <label
           htmlFor="photos"
           className="block text-sm font-medium text-neutral-800"
         >
-          Photos <span className="text-neutral-500">({photos.length}/8)</span>
+          Photos{" "}
+          <span className="text-neutral-500">
+            ({photos.length}/{cap})
+          </span>
         </label>
         <div className="mt-2">
           <button
@@ -373,7 +625,7 @@ function UploadStage({
             disabled={atCap}
             className="flex w-full items-center justify-center rounded-xl border-2 border-dashed border-neutral-300 bg-white px-4 py-6 text-base font-medium text-neutral-700 transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
           >
-            {atCap ? "Max 8 photos" : "Take photo or choose images"}
+            {atCap ? `Max ${cap} photos` : "Take photo or choose images"}
           </button>
           <input
             ref={fileInputRef}
@@ -433,14 +685,25 @@ function UploadStage({
         />
       </div>
 
-      <button
-        type="button"
-        onClick={onGenerate}
-        disabled={photos.length === 0}
-        className="w-full rounded-xl bg-neutral-900 px-4 py-3.5 text-base font-semibold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        Generate listing
-      </button>
+      {batchMode ? (
+        <button
+          type="button"
+          onClick={onBatchGenerate}
+          disabled={photos.length === 0}
+          className="w-full rounded-xl bg-neutral-900 px-4 py-3.5 text-base font-semibold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Group photos →
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={onGenerate}
+          disabled={photos.length === 0}
+          className="w-full rounded-xl bg-neutral-900 px-4 py-3.5 text-base font-semibold text-white transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Generate listing
+        </button>
+      )}
     </div>
   );
 }
