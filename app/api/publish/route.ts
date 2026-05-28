@@ -13,6 +13,7 @@ const PHOTOS_DIR = resolve(process.cwd(), "data", "photos");
 type Body = {
   platform?: string;
   listingId?: string;
+  mode?: "draft" | "review";
   listing?: {
     title?: string;
     description?: string;
@@ -49,16 +50,20 @@ export async function POST(req: Request) {
     return NextResponse.json({ success: false, error: "invalid_listing_fields" }, { status: 400 });
   }
 
-  const limit = checkRateLimit("facebook");
-  if (!limit.ok) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: limit.reason,
-        waitMs: limit.reason === "too_soon" ? limit.waitMs : undefined,
-      },
-      { status: 429 },
-    );
+  // Rate-limit only applies to live publishes, not drafts.
+  const effectiveMode = body.mode === "draft" ? "draft" : "review";
+  if (effectiveMode === "review") {
+    const limit = checkRateLimit("facebook");
+    if (!limit.ok) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: limit.reason,
+          waitMs: limit.reason === "too_soon" ? limit.waitMs : undefined,
+        },
+        { status: 429 },
+      );
+    }
   }
 
   const listingDir = resolve(PHOTOS_DIR, listingId);
@@ -88,11 +93,13 @@ export async function POST(req: Request) {
     condition: l.condition,
     category: l.category,
     photos: photoPaths,
+    mode: effectiveMode,
   };
 
   const result = await publishToFBMarketplace(input);
 
-  if (result.success) recordPublish("facebook");
+  // Only record in rate-limit history for live publishes (not drafts).
+  if (result.success && effectiveMode === "review") recordPublish("facebook");
 
   return NextResponse.json(result, { status: result.success ? 200 : 500 });
 }
