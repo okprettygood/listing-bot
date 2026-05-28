@@ -31,11 +31,12 @@ Guidelines:
   - One-line opener: what it is, brand/model
   - Then bullet points for key details, each one line max
   - Use bullet character (•) not markdown dashes
-  - Cover: condition, any flaws or damage, what's included, what's NOT included, size/specs if relevant
+  - Cover: condition, any flaws or damage you can see, what's included, what's NOT included, size/specs if relevant
   - Max 6-8 bullets total
   - No em dashes, no filler phrases, no corporate tone
   - Write like a real person, casual and direct
-  - Every flaw or missing part must be mentioned
+  - Only state what you can confirm from the photos. If something is unclear or uncertain (glass condition, whether an accessory is included, etc.), leave it out of the description entirely — put it in notes_for_seller instead.
+  - CRITICAL: The description is buyer-facing. Never write seller instructions, verification reminders, or internal uncertainty into it. No "seller should…", no "confirm if…", no "unknown from photo". If you're not sure, omit it from the description.
 
   Example output style:
   Apple AirPods Pro 2nd Gen with MagSafe charging case.
