@@ -74,6 +74,9 @@ export type PublishInput = {
   condition: string;
   category?: string;
   photos: string[];
+  /** "review" (default): fill form, leave browser open for manual Next→Publish.
+   *  "draft": fill form, click "Save draft", close browser. */
+  mode?: "draft" | "review";
 };
 
 export type PublishResult = {
@@ -81,9 +84,10 @@ export type PublishResult = {
   url?: string;
   error?: string;
   screenshot?: string;
-  /** True when the publisher stopped after filling the form and left the
-   *  browser open for the user to review and click Next → Publish manually. */
+  /** true when publisher stopped after filling — user must click Next→Publish manually */
   readyToReview?: boolean;
+  /** true when "Save draft" was clicked and confirmed */
+  drafted?: boolean;
 };
 
 async function jitter(min = 300, max = 1500): Promise<void> {
@@ -339,14 +343,38 @@ export async function publishToFBMarketplace(input: PublishInput): Promise<Publi
       // optional — skip silently
     }
 
-    // ── Hand off to user ──────────────────────────────────────────────────
-    // All fields are filled. Take a screenshot so the phone can show a
-    // preview, then leave the browser open so the user can click
-    // Next → Publish themselves. Never auto-submit.
+    // ── Hand off or save draft ────────────────────────────────────────────
     await jitter(500, 800); // let any UI settle
-    const reviewShot = await snapshot(page, "ready");
-    keepBrowserOpen = true;
-    return { success: true, readyToReview: true, screenshot: reviewShot };
+
+    if ((input.mode ?? "review") === "review") {
+      const reviewShot = await snapshot(page, "ready");
+      keepBrowserOpen = true;
+      return { success: true, readyToReview: true, screenshot: reviewShot };
+    }
+
+    // ── Draft mode: click "Save draft" ────────────────────────────────────
+    const saveDraftBtn = page
+      .getByRole("button", { name: /save\s*(?:as\s*)?draft/i })
+      .or(page.locator("a", { hasText: /save\s*(?:as\s*)?draft/i }))
+      .first();
+
+    const draftBtnVisible = await saveDraftBtn
+      .waitFor({ state: "visible", timeout: 8000 })
+      .then(() => true)
+      .catch(() => false);
+
+    if (!draftBtnVisible) {
+      return fail(
+        "selector_failed: Save draft button not found — FB may have changed its UI",
+        await snapshot(page, "no-save-draft-btn"),
+      );
+    }
+
+    await saveDraftBtn.click();
+    await jitter(1500, 2500); // wait for FB to process the save
+
+    const draftShot = await snapshot(page, "draft-saved");
+    return { success: true, drafted: true, screenshot: draftShot };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return fail(`publisher_error: ${msg}`, await snapshot(page, "exception"));
